@@ -31,26 +31,22 @@ accuracy <- function(true_ratings, predicted_ratings) {
 }
 
 # A function to discretize ratings to nearest valid 0.5
-flixStar <- function(rating) {
-  rating <- round(rating*2)/2
-  rating <- replace(rating, rating <= 0, 0.5)
-  rating <- replace(rating, rating > 5, 5)
+flixStar <- function(ratings) {
+  ratings <- round(ratings*2)/2
+  ratings <- replace(ratings, ratings <= 0, 0.5)
+  ratings <- replace(ratings, ratings > 5, 5)
 
-  rating
+  ratings
 }
 
 # Follow the textbook approach
 # overall averages for the whole set
-mu_hat <- mean(trainSet$rating)
-median_hat <- median(trainSet$rating)
+mu <- mean(trainSet$rating)
 
-native_acc <- accuracy(testSet$rating, flixStar(mu_hat))
-median_acc <- accuracy(testSet$rating, flixStar(median_hat))
+native_acc <- accuracy(testSet$rating, flixStar(mu))
 acc_results <- data_frame(method = "mean", acc = native_acc)
-acc_results <- bind_rows(acc_results, data_frame(method="median", acc=median_acc))
 
 # movie effects
-mu <- mean(trainSet$rating)
 movie_avgs <- trainSet %>%
   group_by(movieId) %>%
   summarize(b_i = mean(rating - mu))
@@ -58,19 +54,23 @@ movie_avgs <- trainSet %>%
 predicted_ratings <- testSet %>% 
   left_join(movie_avgs, by='movieId') %>%
   .$b_i + mu
-model_1_acc <- accuracy(testSet$rating, predicted_ratings)
-acc_results <- bind_rows(acc_results, data_frame(method="mean movie", acc=model_1_acc))
+model_1_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie", acc=model_1_acc))
 
-#using median
-med <- median(trainSet$rating)
-movie_avgs <- trainSet %>%
-  group_by(movieId) %>%
-  summarize(b_i = median(rating - med))
+# user effects
+user_avgs <- trainSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
 
 predicted_ratings <- testSet %>% 
   left_join(movie_avgs, by='movieId') %>%
-  .$b_i + med
-model_1_acc <- accuracy(testSet$rating, predicted_ratings)
-acc_results <- bind_rows(acc_results, data_frame(method="median movie", acc=model_1_acc))
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_2_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie+user", acc=model_2_acc))
+
 
 acc_results %>% knitr::kable()
