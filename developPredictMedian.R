@@ -74,5 +74,81 @@ predicted_ratings <- testSet %>%
 model_2_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
 acc_results <- bind_rows(acc_results, data_frame(method="movie+user", acc=model_2_acc))
 
+# regularized movie effect
+# using median
+lambda <- 2.33
+movie_reg_avgs <- trainSet %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = sum(rating - med)/(n()+lambda), n_i = n())
+
+predicted_ratings <- testSet %>% 
+  left_join(movie_reg_avgs, by='movieId') %>%
+  mutate(pred = med + b_i) %>%
+  .$pred
+
+model_3_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie reg", acc=model_3_acc))
+
+# genre effect n > minGenre
+# using median
+
+minGenre <- 220 # determined best between 10 and 1000
+
+genre_avgs <- trainSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarize(n = n(), b_g = median(rating - med - b_i - b_u)) %>%
+  filter(n >= minGenre) %>%
+  select(-n)
+
+predicted_ratings <- testSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_avgs, by='genres') %>%
+  mutate(b_g = replace_na(b_g, 0)) %>%
+  mutate(pred = med + b_i + b_u + b_g) %>%
+  .$pred
+
+model_4_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie+user+genre", acc=model_4_acc))
+
+# regularized everything
+l <- 0.9
+
+b_i <- trainSet %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - med)/(n()+l)) %>%
+  mutate(b_i = flixStar(med + b_i) - med)
+
+b_u <- trainSet %>%
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - med)/(n()+l)) %>%
+  mutate(b_u = flixStar(med + b_u) - med)
+
+  
+b_g <- trainSet %>%
+  left_join(b_i, by='movieId') %>%
+  left_join(b_u, by='userId') %>%
+  group_by(genres) %>%
+  summarize(n = n(), b_g = sum(rating - med - b_i - b_u)/(n() + l)) %>%
+  filter(n >= minGenre) %>%
+  select(-n) %>%
+  mutate(b_g = flixStar(med + b_g) - med)
+
+  
+
+predicted_ratings <- testSet %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_g, by="genres") %>%
+  mutate(b_g = replace_na(b_g, 0)) %>%
+  mutate(pred = med + b_i + b_u + b_g) %>%
+  .$pred
+
+model_5_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="reg movie+user+genre", acc=model_5_acc))
+
 
 acc_results %>% knitr::kable()

@@ -4,7 +4,7 @@ library(dslabs)
 library(caret)
 
 data("movielens")
-movielens <- select(movielens, -year) # to match edx set
+movielens <- select(movielens, -year) # to match edx set which doesn't have year
 
 # Create train set and test set
 set.seed(1)
@@ -72,5 +72,135 @@ predicted_ratings <- testSet %>%
 model_2_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
 acc_results <- bind_rows(acc_results, data_frame(method="movie+user", acc=model_2_acc))
 
+# regularized movie effect
+lambda <- 2.33
+movie_reg_avgs <- trainSet %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = sum(rating - mu)/(n()+lambda), n_i = n())
+
+predicted_ratings <- testSet %>% 
+  left_join(movie_reg_avgs, by='movieId') %>%
+  mutate(pred = mu + b_i) %>%
+  .$pred
+
+model_3_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie reg", acc=model_3_acc))
+
+# genre effect n > minGenre
+
+minGenre <- 220 # determined best between 10 and 1000
+
+genre_avgs <- trainSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarize(n = n(), b_g = mean(rating - mu - b_i - b_u)) %>%
+  filter(n >= minGenre) %>%
+  select(-n)
+  
+predicted_ratings <- testSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_avgs, by='genres') %>%
+  mutate(b_g = replace_na(b_g, 0)) %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  .$pred
+  
+model_4_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+acc_results <- bind_rows(acc_results, data_frame(method="movie+user+genre", acc=model_4_acc))
+
+
+# regularized everything
+l <- 0.9
+
+  b_i <- trainSet %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+
+  b_u <- trainSet %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+
+  b_g <- trainSet %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    group_by(genres) %>%
+    summarize(n = n(), b_g = sum(rating - mu - b_i - b_u)/(n() + l)) %>%
+    filter(n >= minGenre) %>%
+    select(-n)
+
+  predicted_ratings <- testSet %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_g, by="genres") %>%
+    mutate(b_g = replace_na(b_g, 0)) %>%
+    mutate(pred = mu + b_i + b_u + b_g) %>%
+    .$pred
+
+  model_5_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
+  acc_results <- bind_rows(acc_results, data_frame(method="reg movie+user+genre", acc=model_5_acc))
+  
+
+  
 
 acc_results %>% knitr::kable()
+
+# #Determine the best lambda.... 0.9
+# lambdas <- seq(0.5, 1.5, 0.1)
+# 
+# accs <- sapply(lambdas, function(l){
+#   
+#   b_i <- trainSet %>% 
+#     group_by(movieId) %>%
+#     summarize(b_i = sum(rating - mu)/(n()+l))
+#   
+#   b_u <- trainSet %>% 
+#     left_join(b_i, by="movieId") %>%
+#     group_by(userId) %>%
+#     summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+#   
+#   b_g <- trainSet %>%
+#     left_join(movie_avgs, by='movieId') %>%
+#     left_join(user_avgs, by='userId') %>%
+#     group_by(genres) %>%
+#     summarize(n = n(), b_g = sum(rating - mu - b_i - b_u)/(n() + l)) %>%
+#     filter(n >= minGenre) %>%
+#     select(-n)
+#   
+#   predicted_ratings <- testSet %>% 
+#     left_join(b_i, by = "movieId") %>%
+#     left_join(b_u, by = "userId") %>%
+#     left_join(b_g, by="genres") %>%
+#     mutate(b_g = replace_na(b_g, 0)) %>%
+#     mutate(pred = mu + b_i + b_u + b_g) %>%
+#     .$pred
+#   return(accuracy(testSet$rating, flixStar(predicted_ratings)))
+# })
+# qplot(lambdas, accs)
+# lambdas[which.max(accs)]
+
+# #Determine the best num genres
+# numgen <- seq(10, 1000, 10)
+# 
+# accs <- sapply(numgen, function(minGenre){
+#   genre_avgs <- trainSet %>% 
+#     left_join(movie_avgs, by='movieId') %>%
+#     left_join(user_avgs, by='userId') %>%
+#     group_by(genres) %>%
+#     summarize(n = n(), b_g = mean(rating - mu - b_i - b_u)) %>%
+#     filter(n >= minGenre) %>%
+#     select(-n)
+#   
+#   predicted_ratings <- testSet %>% 
+#     left_join(movie_avgs, by='movieId') %>%
+#     left_join(user_avgs, by='userId') %>%
+#     left_join(genre_avgs, by='genres') %>%
+#     mutate(b_g = replace_na(b_g, 0)) %>%
+#     mutate(pred = mu + b_i + b_u + b_g) %>%
+#     .$pred
+#   
+#   return(accuracy(testSet$rating, flixStar(predicted_ratings)))
+# })
+# qplot(numgen, accs)
+# numgen[which.max(accs)] # 220
