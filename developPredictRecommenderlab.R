@@ -1,7 +1,6 @@
 ## Script to develop prediction
 library(tidyverse)
 library(dslabs)
-library(caret)
 
 data("movielens")
 movielens <- select(movielens, -year) # to match edx set which doesn't have year
@@ -17,7 +16,7 @@ accuracy <- function(true_ratings, predicted_ratings) {
 
 # A general function to discretize a vector ratings with optional Whole flag for integers only
 flixStar <- function(ratings, whole = FALSE) {
-  ratings <- replace(ratings, ratings <= 0.5, 0.51) # zero not allowed, IEEE rounding
+  ratings <- replace(ratings, ratings <= 0.5, 0.51) # zero not allowed, nudge for IEEE rounding
   ratings <- replace(ratings, ratings > 5, 5) # 5 is max rating
   
   data.frame(ratings, whole) %>% 
@@ -29,7 +28,21 @@ flixStar <- function(ratings, whole = FALSE) {
 # prepare the Recommenderlab matrix
 library(recommenderlab)
 rm <- movielens %>% select(userId, movieId, rating) %>% as("realRatingMatrix")
-rm_norm <- normalize(rm)
+
+e <- evaluationScheme(rm, method="split", train=0.9, given = -10)
+
+r1 <- Recommender(getData(e, "train"), method = "UBCF", parameter=list(nn=10))
+
+
+p1 <- predict(r1, getData(e, "known"), type="ratings") # fills in ratings for unknowns, knowns are NA
+error <-  calcPredictionAccuracy(p1, getData(e, "unknown")) # versus the actual "unknown" ratings
+
+unknown <- as(getData(e, "unknown"), "data.frame") %>% as.tibble()
+unknown_predict <- p1 %>% as("data.frame") %>% as.tibble()
+
+compare <- inner_join(unknown, unknown_predict, by = c("user", "item"), suffix = c("Actual", "Predicted"))
+
+accuracy(compare$ratingActual, flixStar(compare$ratingPredicted))
 
 # explore ratings
 # proportion of whole number ratings
@@ -40,8 +53,9 @@ movielens %>% group_by(userId) %>%
   summarize(total = length(rating), 
             wholes = sum(rating %% 1 == 0), 
             wholepct = wholes/total) %>%
-  ggplot(aes(wholepct)) + geom_histogram(binwidth = 0.01)
-  
+  ggplot(aes(wholepct)) + geom_histogram(binwidth = 0.1)
+
+
 
 # We want to tag certain users as always or nearly always assigning whole number ratings
 # Explore the "nearly" cutoff
@@ -82,3 +96,18 @@ movielens %>% group_by(userId) %>% filter(userId %in% usersWhoWhole) %>%
 
 length(usersWhoWhole)
 length(usersWhoWhole) / movielens %>% group_by(userId) %>% summarize() %>% nrow()
+
+compare <- compare %>% mutate(userWhoWholes = user %in% usersWhoWhole)
+accuracy(compare$ratingActual, flixStar(compare$ratingPredicted, whole = compare$userWhoWholes))
+
+# algorithms <- list(
+#    "random items" = list(name="RANDOM", param=NULL),
+#    "popular items" = list(name="POPULAR", param=NULL),
+#    "user-based CF" = list(name="UBCF", param=list(nn=25)),
+#    "item-based CF" = list(name="IBCF", param=list(k=10)),
+#    "SVD approximation" = list(name="SVD", param=list(k = 50))
+# )
+# 
+# results <- evaluate(e, algorithms, type = "ratings")
+# 
+
