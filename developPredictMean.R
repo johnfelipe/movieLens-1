@@ -30,13 +30,15 @@ accuracy <- function(true_ratings, predicted_ratings) {
   pctAc
 }
 
-# A function to discretize ratings to nearest valid 0.5
-flixStar <- function(ratings) {
-  ratings <- round(ratings*2)/2
-  ratings <- replace(ratings, ratings <= 0, 0.5)
-  ratings <- replace(ratings, ratings > 5, 5)
-
-  ratings
+# A general function to discretize a vector ratings with optional Whole flag for integers only
+flixStar <- function(ratings, whole = FALSE) {
+  ratings <- replace(ratings, ratings <= 0.5, 0.51) # zero not allowed, IEEE rounding
+  ratings <- replace(ratings, ratings > 5, 5) # 5 is max rating
+  
+  data.frame(ratings, whole) %>% 
+    rowwise() %>% 
+    mutate( new = if (whole) round(ratings + 0.01) else round(ratings*2)/2 ) %>% # IEEE rounding
+    .$new
 }
 
 # Follow the textbook approach
@@ -141,8 +143,26 @@ l <- 0.9
   model_5_acc <- accuracy(testSet$rating, flixStar(predicted_ratings))
   acc_results <- bind_rows(acc_results, data_frame(method="reg movie+user+genre", acc=model_5_acc))
   
+## Try whole number rounding for users so inclined
+usersWhoWhole <- trainSet %>% group_by(userId) %>%
+  summarize(total = length(rating), 
+            wholes = sum(rating %% 1 == 0), 
+            wholepct = wholes/total) %>%
+  filter(wholepct >= 0.75) %>%
+  .$userId
+ 
+predicted_ratings <- testSet %>%
+   left_join(b_i, by = "movieId") %>%
+   left_join(b_u, by = "userId") %>%
+   left_join(b_g, by="genres") %>%
+   mutate(b_g = replace_na(b_g, 0)) %>%
+   mutate(pred = mu + b_i + b_u + b_g) %>%
+   mutate(userWhoWholes = userId %in% usersWhoWhole) %>%
+   mutate(roundPred = flixStar(pred, userWhoWholes))
 
-  
+model_6_acc <- accuracy(testSet$rating, predicted_ratings$roundPred)
+acc_results <- bind_rows(acc_results, data_frame(method="reg m+u+g user round", acc=model_6_acc))
+
 
 acc_results %>% knitr::kable()
 
