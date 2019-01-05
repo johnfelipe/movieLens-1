@@ -30,15 +30,12 @@ accuracy <- function(true_ratings, predicted_ratings) {
   pctAc
 }
 
-# A general function to discretize a vector ratings with optional Whole flag for integers only
+# A general function to discretize ratings vector with optional Whole flag vector for integers only
 flixStar <- function(ratings, whole = FALSE) {
-  ratings <- replace(ratings, ratings <= 0.5, 0.51) # zero not allowed, IEEE rounding
-  ratings <- replace(ratings, ratings > 5, 5) # 5 is max rating
-  
-  data.frame(ratings, whole) %>% 
-    rowwise() %>% 
-    mutate( new = if (whole) round(ratings + 0.01) else round(ratings*2)/2 ) %>% # IEEE rounding
-    .$new
+  map2_dbl(ratings, whole, function (a, b) {
+    if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+    if (b) round(a + 0.01) else round(a*2)/2  # IEEE rounding
+  })
 }
 
 # Follow the textbook approach
@@ -148,7 +145,7 @@ usersWhoWhole <- trainSet %>% group_by(userId) %>%
   summarize(total = length(rating), 
             wholes = sum(rating %% 1 == 0), 
             wholepct = wholes/total) %>%
-  filter(wholepct >= 0.75) %>%
+  filter(wholepct >= 0.55) %>%
   .$userId
  
 predicted_ratings <- testSet %>%
