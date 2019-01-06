@@ -1,11 +1,8 @@
 library(tidyverse)
 library(caret)
 
-# For temporary use to save time
-if (!("edx" %in% ls())) load("createDataSets.RData")
-
-# For submission
-# if (!("edx" %in% ls())) source("createDataSets.R")
+# If the data set isn't loaded yet, call the script
+if (!("edx" %in% ls())) source("createDataSets.R")
 
 ## Helper functions
 # A function to calculate accuracy in terms of % exactly correct
@@ -15,16 +12,16 @@ accuracy <- function(true_ratings, predicted_ratings) {
 }
 
 # A general function to discretize ratings vector with optional Whole flag vector for integers only
+# The extra 0.01 additions are due to IEEE rounding, so we can be sure 0.5 always rounds up
 flixStar <- function(ratings, whole = FALSE) {
     map2_dbl(ratings, whole, function (a, b) {
       if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
-      if (b) round(a + 0.01) else round(a*2)/2  # IEEE rounding
+      if (b) round(a + 0.01) else round(a*2)/2
     })
 }
 
 
 ## Split edx into training and test data using same strategy as course split
-
 # Create train set and test set
 set.seed(1)
 test_index <- createDataPartition(y = edx$rating, p=0.2, list = FALSE)
@@ -44,52 +41,59 @@ rm(test_index, temp, removed)
 
 ## Data exploration of training set
 # explore ratings distribution
-trainSet %>% 
+fig1 <- trainSet %>% 
   ggplot() +
   aes(rating) +
-  geom_histogram(binwidth = 0.5)
+  geom_histogram(binwidth = 0.5) +
+  xlab("Rating") + ylab("# Ratings") + ggtitle("Ratings Histogram")
+fig1
+
 # proportion of whole number ratings, which is quite high
 wholes <- sum(trainSet$rating %% 1 == 0) / length(trainSet$rating)
 
 # proportion of whole number ratings per user
-trainSet %>% group_by(userId) %>%
+fig2 <- trainSet %>% group_by(userId) %>%
   summarize(total = length(rating), 
             wholes = sum(rating %% 1 == 0), 
             wholepct = wholes/total) %>%
   ggplot(aes(wholepct)) + geom_histogram(binwidth = 0.1) +
   xlab("% Integer Ratings") + ylab("# Users") + ggtitle("Integer Ratings Per User")
+fig2
 # So, most users only use whole # ratings, and a smaller group use them ~50% of the time
 
 # We want to tag certain users as always or nearly always assigning whole number ratings
 # We will tune the "nearly always" cutoff later.  75% for now
+wholeCutoff <- 0.75
 usersWhoWhole <- trainSet %>% group_by(userId) %>%
   summarize(total = length(rating), 
             wholes = sum(rating %% 1 == 0), 
             wholepct = wholes/total) %>%
-  filter(wholepct >= .75) %>%
+  filter(wholepct >= wholeCutoff) %>%
   .$userId
 
 # Some users don't move their ratings around much
-trainSet %>% group_by(userId) %>% summarize(spread = max(rating) - min(rating)) %>% 
+fig3 <- trainSet %>% group_by(userId) %>% summarize(spread = max(rating) - min(rating)) %>% 
   ggplot(aes(spread)) + geom_histogram(binwidth = 0.5) +
   xlab("Ratings Spread") + ylab("# Users") + ggtitle("Min/Max Ratings Spread")
-
+fig3
 
 # How many different ratings does each user give
-trainSet %>% group_by(userId, rating) %>% summarize(num = n()) %>%
+fig4 <- trainSet %>% group_by(userId, rating) %>% summarize(num = n()) %>%
   group_by(userId) %>% summarize(distinct = n_distinct(rating)) %>%
   ggplot() + aes(distinct) + geom_histogram(binwidth=1) +
   xlab("# Distinct Ratings") + ylab("# Users") + ggtitle("Distinct Ratings Per User")
+fig4
 
 # some users may not use the whole range. Most go up to 5 but fewer go down to 1
 userMinMax <- trainSet %>% group_by(userId) %>% summarize(min = min(rating), max=max(rating))
 
-userMinMax %>% ggplot() + 
+fig5 <- userMinMax %>% ggplot() + 
   geom_histogram(aes(min), binwidth=0.5, fill="blue", alpha=0.5) +
   geom_histogram(aes(max), binwidth=0.5, fill="red", alpha = 0.5) +
   xlab("Rating") + ylab("# Users") + ggtitle("Min (Blue) and Max (Red) Ratings Per User") 
+fig5
 
-
+## Develop prediction algorithm
 # Follow the textbook approach
 # overall mean for the whole set
 mu <- mean(trainSet$rating)
@@ -131,12 +135,11 @@ mean_results <- bind_rows(mean_results, data_frame(Method="Movie+User",
                                                  AccuracyWhole = mean_um_accWholes))
 
 # Center on user/movie/genre-combo
-
 genre_avgs <- trainSet %>% 
   left_join(movie_avgs, by='movieId') %>%
   left_join(user_avgs, by='userId') %>%
   group_by(genres) %>%
-  summarize(b_g = mean(rating - mu - b_i - b_u)) %>%
+  summarize(b_g = mean(rating - mu - b_i - b_u))
   
 predicted_ratings <- testSet %>% 
   left_join(movie_avgs, by='movieId') %>%
@@ -157,7 +160,6 @@ mean_results <- bind_rows(mean_results, data_frame(Method="Movie+User+Genre",
 # Regularization
 # Optimize lambda by minimizing RMSE
 lambdas <- seq(4, 5.5, 0.1)
-
 lRMSEs <- sapply(lambdas, function(l){
 
   b_i <- trainSet %>%
@@ -183,7 +185,8 @@ lRMSEs <- sapply(lambdas, function(l){
     mutate(roundPred = flixStar(pred))
   return(RMSE(testSet$rating, predicted_ratings$pred))
 })
-qplot(lambdas, lRMSEs)
+fig6 <- qplot(lambdas, lRMSEs)
+fig6
 lambda <- lambdas[which.min(lRMSEs)]
 
 # now calculate the regularized accuracy with the best lambda
@@ -221,7 +224,6 @@ mean_results <- bind_rows(mean_results, data_frame(Method="Reg Movie+User+Genre"
 ## Tune our ratings rounding strategy
 # tune the % of the time a user gives integer ratings
 wholes <- seq(0.4,1,0.05)
-
 waccs <- sapply(wholes, function(w) {
 
   usersWhoWhole <- trainSet %>% group_by(userId) %>%
@@ -240,14 +242,39 @@ waccs <- sapply(wholes, function(w) {
   
   return(accuracy(testSet$rating, predicted_ratings$roundPred))
 })
-qplot(wholes, waccs)
-newPct <- wholes[which.max(waccs)]
+fig7 <- qplot(wholes, waccs)
+fig7
+wholeCutoff <- wholes[which.max(waccs)]
 
-mean_results <- bind_rows(mean_results, data_frame(Method="Reg Movie+User+Genre Tune Whole", 
+mean_results <- bind_rows(mean_results, data_frame(Method="Reg Movie+User+Genre Integer Tune", 
                                                    AccuracyWhole = max(waccs)))
 
 mean_results %>% knitr::kable()
 
+# retabulate integer-happy users with optimized cutoff
+usersWhoWhole <- trainSet %>% group_by(userId) %>%
+  summarize(total = length(rating), 
+            wholes = sum(rating %% 1 == 0), 
+            wholepct = wholes/total) %>%
+  filter(wholepct >= wholeCutoff) %>%
+  .$userId
+
+
+
 ## That's as good as we're going to do on the model.
 # Cool, cool.
 # Now predict the validation set.
+predicted_ratings <- validation %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_g, by = "genres") %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+
+write.csv(predicted_ratings %>% select(userId, movieId, rating = roundPred),
+          "submission.csv", na = "", row.names=FALSE)
+
+fig8 <- predicted_ratings %>% ggplot() + 
+  geom_histogram(aes(roundPred), binwidth = 0.5) +
+  xlab("Predicted Rating") + ylab("# Ratings") + ggtitle('Predicted Rating Histogram')
+fig8 

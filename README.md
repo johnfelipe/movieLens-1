@@ -8,3 +8,10 @@ You will download the MovieLens data and run code we will provide to generate yo
 First, there will be a short quiz on the MovieLens data. You can view this quiz as an opportunity to familiarize yourself with the data in order to prepare for your project submission.
 
 Second, you will train a machine learning algorithm using the inputs in one subset to predict movie ratings in the validation set. You will submit your predicted movie ratings in a submission file. Your project itself will be assessed by peer grading, and part of the peer grading will involve running an automated grading script.
+
+## Files included:
+createDataSets.R is as supplied by the course.  It downloads the movielens dataset and splits it into edx and validation.  This will be called if these objects don't exist yet.
+
+masterMean.R is the actual prediction script that develops the model and applies it to the validation list.
+
+report.rmd assumes that the prior scripts have been run.
