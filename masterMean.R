@@ -185,7 +185,8 @@ lRMSEs <- sapply(lambdas, function(l){
     mutate(roundPred = flixStar(pred))
   return(RMSE(testSet$rating, predicted_ratings$pred))
 })
-fig6 <- qplot(lambdas, lRMSEs)
+fig6 <- ggplot() + aes(lambdas, lRMSEs) + geom_point() +
+  xlab('Lambda') + ylab("RMSE") + ggtitle("Lambda Tuning")
 fig6
 lambda <- lambdas[which.min(lRMSEs)]
 
@@ -242,7 +243,9 @@ waccs <- sapply(wholes, function(w) {
   
   return(accuracy(testSet$rating, predicted_ratings$roundPred))
 })
-fig7 <- qplot(wholes, waccs)
+fig7 <- ggplot() + aes(wholes, waccs) + geom_point() +
+  xlab("% Ratings Integer") + ylab("Accuracy") + ggtitle("% Integer Tuning")
+
 fig7
 wholeCutoff <- wholes[which.max(waccs)]
 
@@ -259,22 +262,91 @@ usersWhoWhole <- trainSet %>% group_by(userId) %>%
   filter(wholepct >= wholeCutoff) %>%
   .$userId
 
+# now re-round predicted ratings based on the above
+predicted_ratings <- predicted_ratings %>%
+  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+
+fig7b <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  ggplot() + aes(diff) + geom_histogram(binwidth = 0.5) +
+  xlab("Prediction - True") + ylab("Count") + ggtitle("Prediction Error in edX Test Set")
+fig7b
+#Skewed a little negative (our prediction is pessimistic)
+#Which true ratings are we being optimistic/pessimistic about
+tooHi <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  filter(diff == 1) %>% .$rating
+tooLo <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  filter(diff == -1) %>% .$rating
+
+fig7c <- ggplot() + 
+  geom_histogram(aes(tooHi), fill = "red", binwidth = 0.5, alpha = 0.7) +
+  geom_histogram(aes(tooLo), fill = "green", binwidth = 0.5, alpha = 0.7) +
+  xlab("True Rating") + ylab("Count") + ggtitle("Predction +1 Too High (Red) or -1 Too Low (Green)")
+
+# It appears that we're under-predicting positive ratings. Could be an "optimism bias"
+# I.e. many of our predicted 4s should be 5s. Many predicted 3s should be 4s
+# See if we can adjust our rounding algorithm to ceiling good ratings up instead of down
+optimistCutoff <- seq(2,4.5,0.1)
+
+optimistAcc <- sapply(optimistCutoff, function(optimist) {
+  flixStar2 <- function(ratings, whole = FALSE) {
+    map2_dbl(ratings, whole, function (a, b) {
+      if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+      if (b) {
+        if (a < optimist) round(a + 0.01) else ceiling(a)
+        } else {
+          if (a < optimist) round(a*2)/2 else ceiling(a*2)/2
+        }
+    })
+  }
+  
+  predicted_ratings2 <- predicted_ratings %>%
+    mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
+  
+  return(accuracy(testSet$rating, predicted_ratings2$roundPred))
+
+})
+
+fig8 <- ggplot() + aes(optimistCutoff, optimistAcc) + geom_point() +
+  xlab("Ceiling Round Above This Rating") + ylab("Accuracy") + ggtitle("Optimist Round Tuning")
+newOptimist <- optimistCutoff[which.max(optimistAcc)]
+
+# Redefine our rounding function accordingly
+flixStar2 <- function(ratings, whole = FALSE) {
+  map2_dbl(ratings, whole, function (a, b) {
+    optimist <- newOptimist
+    if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+    if (b) {
+      if (a < optimist) round(a + 0.01) else ceiling(a)
+    } else {
+      if (a < optimist) round(a*2)/2 else ceiling(a*2)/2
+    }
+  })
+}
+
+# now re-round predicted ratings based on the above
+predicted_ratings <- predicted_ratings %>%
+  mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
+
+mean_results <- bind_rows(mean_results, data_frame(Method="Reg MUG Integer + Optimist Tune", 
+                                                   AccuracyWhole = max(optimistAcc)))
+
+mean_results %>% knitr::kable()
 
 
 ## That's as good as we're going to do on the model.
-# Cool, cool.
+
 # Now predict the validation set.
-predicted_ratings <- validation %>%
+predicted_ratings_V <- validation %>%
   left_join(b_i, by = "movieId") %>%
   left_join(b_u, by = "userId") %>%
   left_join(b_g, by = "genres") %>%
   mutate(pred = mu + b_i + b_u + b_g) %>%
-  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+  mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
 
-write.csv(predicted_ratings %>% select(userId, movieId, rating = roundPred),
+write.csv(predicted_ratings_V %>% select(userId, movieId, rating = roundPred),
           "submission.csv", na = "", row.names=FALSE)
 
-fig8 <- predicted_ratings %>% ggplot() + 
+figV <- predicted_ratings_V %>% ggplot() + 
   geom_histogram(aes(roundPred), binwidth = 0.5) +
   xlab("Predicted Rating") + ylab("# Ratings") + ggtitle('Predicted Rating Histogram')
-fig8 
+figV 

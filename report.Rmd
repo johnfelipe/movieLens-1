@@ -1,0 +1,189 @@
+---
+title: "MovieLens Project PH125.9x"
+author: "Martin Schiff"
+date: "January 6, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r prep, include=FALSE}
+library(tidyverse)
+library(caret)
+
+# If the data set isn't loaded yet, call the script
+# if (!("edx" %in% ls())) source("createDataSets.R")
+if (!("edx" %in% ls())) load("createDataSets.RData")
+
+```
+
+## Introduction
+
+In this project, we are asked to create a movie recommmendation system. Specifically, we are to predict the rating a user will give a movie in a validation set, based on a given set of users and movie ratings. The prediction will be judged on the raw accuracy---i.e. the percentage of predicted ratings exactly equal to the true user rating.  This is a somewhat different goal than the usual task of minimizing predicted error or selecting items a user is most likely to rate highly.  Only exactly correct predictions are considered accurate.
+
+The provided data is from the MovieLens 10M set (i.e. 10 million ratings), a much larger version of the data set contained in the `dslabs` library used during the Recommendation Systems portion of the course.  The given data set `edx` is approximately 9 million records long and contains the following features:
+
+```{r}
+names(edx)
+```
+
+while the test data set `validation` is roughly 1 million records long with the true `rating` column omitted, since it is what is to be predicted by the model.  
+
+Allowable ratings (and all of the ratings in the two provided sets) are from 0.5 to 5 in steps of 0.5, which could alternatively be considered a 10-step ordered classification.
+
+The prediction algorithm used in this project generally follows the simple model used in the course, judging the "bias" or difference from the mean for each user, item, and genre and implementing a regularization to discount extreme, occasional values.  While other algorithms may have proved more accurate, they were either beyond the scope of the course content or computationally prohibitive on this large set of data (particularly since the analysis needs to run on an unknown computer for peer grading).  The course approach has the advangages of being fast, easily scalable, and simple to modify.
+
+The task of determining discrete, half-to-5-star ratings from the real number prediction allowed for significant improvements over simple rounding, and is the focus of the novel work discussed in this report.
+
+## Methods & Analysis
+
+As with the `dslabs` MovieLens set, the provided data is already well organized and in a clean, usable format.  Before we begin exploring the data and assembling a model, we set up some helper functions to produce and evaluate our discrete prediciton ratings.
+
+### Helper Functions & Data Preparation
+
+While this analysis will make use of the root mean-square error (RMSE) and associated `caret` functions, the final judgement of our prediction will be based on true accuracy.  It also requires discrete rating predictions to the nearest half star if we are to match the rubric of the true ratings.  We set up the following helper functions to enable this.
+
+```{r helper, echo=TRUE}
+# A function to calculate accuracy in terms of % exactly correct
+accuracy <- function(true_ratings, predicted_ratings) {
+  correct <- sum(true_ratings == predicted_ratings)
+  return(correct / length(true_ratings))
+}
+
+# A general function to discretize ratings vector with optional Whole flag vector for integers only
+# The extra 0.01 additions are due to IEEE rounding, so we can be sure 0.5 always rounds up
+flixStar <- function(ratings, whole = FALSE) {
+    map2_dbl(ratings, whole, function (a, b) {
+      if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+      if (b) round(a + 0.01) else round(a*2)/2
+    })
+}
+```
+
+The benefit of the `flixStar()` function having the option of returning ratings discretized to either half or integer numbers will be motivated below.  The additional 0.01 factors are to account for IEEE rounding behavior, which would otherwise round 0.5 to the nearest even number.
+
+Finally, to enable learning and evaluation without the use of the `validation` set, we split the `edx` set into its own `trainSet` and `testSet` components, using the same method as in the provided `createDataSets.R` script.
+
+```{r split, include=FALSE}
+## Split edx into training and test data using same strategy as course split
+# Create train set and test set
+set.seed(1)
+test_index <- createDataPartition(y = edx$rating, p=0.2, list = FALSE)
+trainSet <- edx[-test_index,]
+temp <- edx[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+testSet <- temp %>% 
+  semi_join(trainSet, by = "movieId") %>%
+  semi_join(trainSet, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, testSet)
+trainSet <- rbind(trainSet, removed)
+rm(test_index, temp, removed)
+
+```
+
+
+### Data Exploration
+
+The breadth and distribution of the movies, users, ratings, and similar features were explored in the `dslabs` data set in the coursework, and are similar here. Some additional insight into the ratings distribution was gained and enabled a significant boost in prediction accuracy.
+
+The overall distribution of ratings in `trainSet` is similar to that from the coursework:
+
+```{r fig_distribution, echo=FALSE}
+# explore ratings distribution
+fig1 <- trainSet %>% 
+  ggplot() +
+  aes(rating) +
+  geom_histogram(binwidth = 0.5) +
+  xlab("Rating") + ylab("# Ratings") + ggtitle("Ratings Histogram")
+fig1
+
+# proportion of whole number ratings, which is quite high
+wholes <- sum(trainSet$rating %% 1 == 0) / length(trainSet$rating)
+
+```
+with a median rating of `r median(trainSet$rating)` and a significantly higher proportion of integer versus half ratings (`r round(wholes, digits=3)`).
+
+Grouping on a user-by-user basis, we also see that very many users only assign integer-valued ratings:
+
+```{r fig_whole, echo=FALSE}
+# proportion of whole number ratings per user
+fig2 <- trainSet %>% group_by(userId) %>%
+  summarize(total = length(rating), 
+            wholes = sum(rating %% 1 == 0), 
+            wholepct = wholes/total) %>%
+  ggplot(aes(wholepct)) + geom_histogram(binwidth = 0.1) +
+  xlab("% Integer Ratings") + ylab("# Users") + ggtitle("Integer Ratings Per User")
+fig2
+# So, most users only use whole # ratings, and a smaller group use them ~50% of the time
+
+```
+
+With this insight, we can tag certain users as preferring whole number ratings, and ensure that predictions for these users are rounded to an integer.  While many users assign integers 100% of the time, setting this to a lower percentage captures many more ratings.  An initial value of 75% is used here, and this percentage is tuned below to higher accuracy at an even lower proportion.
+
+```{r usersWhoWhole, echo=TRUE}
+# We want to tag certain users as always or nearly always assigning whole number ratings
+# We will tune the "nearly always" cutoff later.  75% for now
+wholeCutoff <- 0.75
+usersWhoWhole <- trainSet %>% group_by(userId) %>%
+  summarize(total = length(rating), 
+            wholes = sum(rating %% 1 == 0), 
+            wholepct = wholes/total) %>%
+  filter(wholepct >= wholeCutoff) %>%
+  .$userId
+```
+
+```{r include=FALSE}
+# Some users don't move their ratings around much
+fig3 <- trainSet %>% group_by(userId) %>% summarize(spread = max(rating) - min(rating)) %>% 
+  ggplot(aes(spread)) + geom_histogram(binwidth = 0.5) +
+  xlab("Ratings Spread") + ylab("# Users") + ggtitle("Min/Max Ratings Spread")
+
+
+# How many different ratings does each user give
+fig4 <- trainSet %>% group_by(userId, rating) %>% summarize(num = n()) %>%
+  group_by(userId) %>% summarize(distinct = n_distinct(rating)) %>%
+  ggplot() + aes(distinct) + geom_histogram(binwidth=1) +
+  xlab("# Distinct Ratings") + ylab("# Users") + ggtitle("Distinct Ratings Per User")
+
+
+# some users may not use the whole range. Most go up to 5 but fewer go down to 1
+userMinMax <- trainSet %>% group_by(userId) %>% summarize(min = min(rating), max=max(rating))
+
+fig5 <- userMinMax %>% ggplot() + 
+  geom_histogram(aes(min), binwidth=0.5, fill="blue", alpha=0.5) +
+  geom_histogram(aes(max), binwidth=0.5, fill="red", alpha = 0.5) +
+  xlab("Rating") + ylab("# Users") + ggtitle("Min (Blue) and Max (Red) Ratings Per User") 
+
+rm(userMinMax)
+
+```
+
+Similarly, many users do not assign the entire range of ratings.  While nearly all users assign ratings up to and including 5, many do not ever assign the lowest ratings:
+
+```{r fig_minmax, echo=FALSE}
+fig5
+```
+
+### Model Development
+
+### Final Model Tuning
+
+
+
+
+
+
+
+
+## Results
+
+
+
+## Conclusion
+
+
