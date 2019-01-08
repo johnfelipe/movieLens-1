@@ -2,7 +2,7 @@
 title: "MovieLens Project PH125.9x"
 author: "Martin Schiff"
 date: "January 6, 2019"
-output: html_document
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -14,14 +14,15 @@ library(tidyverse)
 library(caret)
 
 # If the data set isn't loaded yet, call the script
-# if (!("edx" %in% ls())) source("createDataSets.R")
-if (!("edx" %in% ls())) load("createDataSets.RData")
+if (!("edx" %in% ls())) source("createDataSets.R")
+
+# if (!("edx" %in% ls())) load("createDataSets.RData")
 
 ```
 
 ## Introduction
 
-In this project, we are asked to create a movie recommmendation system. Specifically, we are to predict the rating a user will give a movie in a validation set, based on a given set of users and movie ratings. The prediction will be judged on the raw accuracy---i.e. the percentage of predicted ratings exactly equal to the true user rating.  This is a somewhat different goal than the usual task of minimizing predicted error or selecting items a user is most likely to rate highly.  Only exactly correct predictions are considered accurate.
+In this project, we are asked to create a movie recommendation system. Specifically, we are to predict the rating a user will give a movie in a validation set, based on a given set of users and movie ratings. The prediction will be judged on the raw accuracy---i.e. the percentage of predicted ratings exactly equal to the true user rating.  This is a somewhat different goal than the usual task of minimizing predicted error or selecting items a user is most likely to rate highly.  Only exactly correct predictions are considered accurate.
 
 The provided data is from the MovieLens 10M set (i.e. 10 million ratings), a much larger version of the data set contained in the `dslabs` library used during the Recommendation Systems portion of the course.  The given data set `edx` is approximately 9 million records long and contains the following features:
 
@@ -33,13 +34,13 @@ while the test data set `validation` is roughly 1 million records long with the 
 
 Allowable ratings (and all of the ratings in the two provided sets) are from 0.5 to 5 in steps of 0.5, which could alternatively be considered a 10-step ordered classification.
 
-The prediction algorithm used in this project generally follows the simple model used in the course, judging the "bias" or difference from the mean for each user, item, and genre and implementing a regularization to discount extreme, occasional values.  While other algorithms may have proved more accurate, they were either beyond the scope of the course content or computationally prohibitive on this large set of data (particularly since the analysis needs to run on an unknown computer for peer grading).  The course approach has the advangages of being fast, easily scalable, and simple to modify.
+The prediction algorithm used in this project generally follows the simple model used in the course, judging the "bias" or difference from the mean for each user, item, and genre and implementing a regularization to discount extreme, occasional values.  While other algorithms may have proved more accurate, they were either beyond the scope of the course content or computationally prohibitive on this large set of data (particularly since the analysis needs to run on an unknown computer for peer grading).  The course approach has the advantages of being fast, easily scalable, and simple to modify.
 
 The task of determining discrete, half-to-5-star ratings from the real number prediction allowed for significant improvements over simple rounding, and is the focus of the novel work discussed in this report.
 
 ## Methods & Analysis
 
-As with the `dslabs` MovieLens set, the provided data is already well organized and in a clean, usable format.  Before we begin exploring the data and assembling a model, we set up some helper functions to produce and evaluate our discrete prediciton ratings.
+As with the `dslabs` MovieLens set, the provided data is already well organized and in a clean, usable format.  Before we begin exploring the data and assembling a model, we set up some helper functions to produce and evaluate our discrete prediction ratings.
 
 ### Helper Functions & Data Preparation
 
@@ -106,6 +107,7 @@ fig1
 wholes <- sum(trainSet$rating %% 1 == 0) / length(trainSet$rating)
 
 ```
+
 with a median rating of `r median(trainSet$rating)` and a significantly higher proportion of integer versus half ratings (`r round(wholes, digits=3)`).
 
 Grouping on a user-by-user basis, we also see that very many users only assign integer-valued ratings:
@@ -137,7 +139,7 @@ usersWhoWhole <- trainSet %>% group_by(userId) %>%
   .$userId
 ```
 
-```{r include=FALSE}
+```{r unused, include=FALSE}
 # Some users don't move their ratings around much
 fig3 <- trainSet %>% group_by(userId) %>% summarize(spread = max(rating) - min(rating)) %>% 
   ggplot(aes(spread)) + geom_histogram(binwidth = 0.5) +
@@ -163,7 +165,7 @@ rm(userMinMax)
 
 ```
 
-Similarly, many users do not assign the entire range of ratings.  While nearly all users assign ratings up to and including 5, many do not ever assign the lowest ratings:
+Similarly, some users do not assign the entire range of ratings.  While nearly all users assign ratings up to and including 5, some do not ever assign the lowest ratings:
 
 ```{r fig_minmax, echo=FALSE}
 fig5
@@ -171,19 +173,358 @@ fig5
 
 ### Model Development
 
+The model used for developing the prediction algorithm follows that from the course: the mean rating $\mu$ is modified by one or more "bias" terms $b$ with a residual error $\varepsilon$ expected.
+
+$$ Y_{u,i} = \mu + b_i + b_u + b_g + \varepsilon_{i,u,g} $$
+
+To begin this development, we apply the `accuracy()` helper to the mean and median of our test set.  Since the mean is not generally an integer, it is fed through our rounding helper function `flixStar()`.
+
+```{r mean_median, echo=TRUE}
+# overall mean for the whole set
+mu <- mean(trainSet$rating)
+mean_acc <- accuracy(testSet$rating, flixStar(mu))
+mean_RMSE <- RMSE(testSet$rating, mu)
+mean_results <- data_frame(Method="Mean Alone", Accuracy = mean_acc, RMSE = mean_RMSE)
+
+# overall median for the whole set
+med <- median(trainSet$rating)
+median_acc <- accuracy(testSet$rating, flixStar(med))
+median_RMSE <- RMSE(testSet$rating, med)
+```
+
+```{r bind_table_median, include=FALSE}
+mean_results <- bind_rows(mean_results, data_frame(Method="Median Alone",
+                                                       Accuracy = median_acc,
+                                                       RMSE = median_RMSE))
+
+```
+
+```{r echo=FALSE}
+mean_results %>% knitr::kable()
+```
+
+Interestingly, while the mean has lower RMSE, the median has much higher accuracy. This stands to reason since the median by definition captures the maximum number of true ratings.
+
+Next, we center ratings on the movie average to determine movie bias $b_i$, on each user's average to determine user bias $b_u$, and on each genre "combo" average to determine genre bias $b_g$. This is because the `genres` feature includes concatenated tags for all genres that apply to the movie (e.g. "Comedy|Drama|Romance").  For current purposes, no attempt was made to split these into individual effects, and each combo was treated as its own genre.  
+
+During development, adding this genre effect provided only a minor improvement over movie + user factors alone.  These intermediate steps are not detailed here.  Splitting the genre into individual tags may have yielded more significant effects.
+
+In addition to calculating the accuracy of the prediction rounded to the nearest half-star, we use the list of integer-preferring users `usersWhoWhole` to restrict that subset of users to whole number predictions.  This yields a significant boost in accuracy.
+
+```{r Mean_UMG, echo=TRUE}
+# Center on user/movie/genre-combo
+movie_avgs <- trainSet %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu))
+
+user_avgs <- trainSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+genre_avgs <- trainSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarize(b_g = mean(rating - mu - b_i - b_u))
+  
+predicted_ratings <- testSet %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genre_avgs, by='genres') %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+
+mean_umg_acc <- accuracy(testSet$rating, flixStar(predicted_ratings$pred))
+mean_umg_accWholes <- accuracy(testSet$rating, predicted_ratings$roundPred)
+mean_umg_RMSE <- RMSE(testSet$rating, predicted_ratings$pred)
+```
+
+```{r bind_table_mug, include=FALSE}
+mean_results <- bind_rows(mean_results, data_frame(Method="Movie + User + Genre", 
+                                                   Accuracy = mean_umg_acc,
+                                                   RMSE = mean_umg_RMSE,
+                                                   Accuracy_Whole = mean_umg_accWholes))
+```
+
+```{r echo=FALSE}
+mean_results %>% knitr::kable()
+```
+
+### Regularization
+
+Regularization penalizes records which stray far from the mean and have few associated ratings, such as an obscure film with only a few very low ratings.  Following the derivation in the course, we can select the bias values using a regularization factor $\lambda$ as follows:
+
+$$\hat{b}_i(\lambda) = \frac{1}{\lambda + n_i} \sum_{i=1}^{n_i} \left(Y_{i,u,g} - \hat{\mu}\right)$$
+$$\hat{b}_u(\lambda) = \frac{1}{\lambda + n_u} \sum_{u=1}^{n_u} \left(Y_{i,u,g} - \hat{b}_i - \hat{\mu}\right)$$
+$$\hat{b}_g(\lambda) = \frac{1}{\lambda + n_g} \sum_{g=1}^{n_g} \left(Y_{i,u,g} - \hat{b}_i - \hat{b}_u - \hat{\mu}\right)$$
+
+```{r regularization, include=FALSE}
+# Regularization
+# Optimize lambda by minimizing RMSE
+lambdas <- seq(4, 5.5, 0.1)
+lRMSEs <- sapply(lambdas, function(l){
+
+  b_i <- trainSet %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+
+  b_u <- trainSet %>%
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  b_g <- trainSet %>%
+    left_join(b_i, by="movieId") %>%
+    left_join(b_u, by="userId") %>%
+    group_by(genres) %>%
+    summarize(b_g = sum(rating - b_i - b_u - mu)/(n()+l))
+
+  predicted_ratings <- testSet %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_g, by="genres") %>%
+    mutate(pred = mu + b_i + b_u + b_g) %>%
+    mutate(roundPred = flixStar(pred))
+  return(RMSE(testSet$rating, predicted_ratings$pred))
+})
+fig6 <- ggplot() + aes(lambdas, lRMSEs) + geom_point() +
+  xlab('Lambda') + ylab("RMSE") + ggtitle("Lambda Tuning")
+
+lambda <- lambdas[which.min(lRMSEs)]
+
+# now calculate the regularized accuracy with the best lambda
+b_i <- trainSet %>%
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+lambda)) 
+
+b_u <- trainSet %>%
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - b_i - mu)/(n()+lambda)) 
+
+b_g <- trainSet %>%
+  left_join(b_i, by="movieId") %>%
+  left_join(b_u, by="userId") %>%
+  group_by(genres) %>%
+  summarize(b_g = sum(rating - b_i - b_u - mu)/(n()+lambda))
+
+predicted_ratings <- testSet %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_g, by = "genres") %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+
+mean_umgR_acc <- accuracy(testSet$rating, flixStar(predicted_ratings$pred))
+mean_umgR_accWholes <- accuracy(testSet$rating, predicted_ratings$roundPred)
+mean_umgR_RMSE <- RMSE(testSet$rating, predicted_ratings$pred)
+```
+
+```{r bind_table_Rumg, include=FALSE}
+mean_results <- bind_rows(mean_results, data_frame(Method="Regularized Movie + User + Genre", 
+                                                 Accuracy = mean_umgR_acc,
+                                                 RMSE = mean_umgR_RMSE,
+                                                 Accuracy_Whole = mean_umgR_accWholes))
+```
+
+
+This regularization is tuned by running over a sequence of $\lambda$ values and selecting the best RMSE result:
+
+```{r fig_lambda, echo=FALSE}
+fig6
+```
+
+The tuned value of $\lambda =$ `r round(lambda, digits=2)` improves the un-rounded RMSE substantially, but with little effect on accuracy.  The regularization effect may be getting lost in the rounding to mostly integer ratings.
+
+```{r echo=FALSE}
+mean_results %>% knitr::kable()
+```
+
 ### Final Model Tuning
 
+With this prediction model in place, we turn back to the strategy we use to determine the discretized ratings.  When we noticed that most users assign only integer ratings, we considered also including users that "mostly" prefer integer ratings.  We tune the proportion of "mostly" here.
+
+```{r whole_tune, include=FALSE}
+## Tune our ratings rounding strategy
+# tune the % of the time a user gives integer ratings
+wholes <- seq(0.4,1,0.05)
+waccs <- sapply(wholes, function(w) {
+
+  usersWhoWhole <- trainSet %>% group_by(userId) %>%
+    summarize(total = length(rating), 
+              wholes = sum(rating %% 1 == 0), 
+              wholepct = wholes/total) %>%
+    filter(wholepct >= w) %>%
+    .$userId
+  
+  predicted_ratings <- testSet %>%
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    left_join(b_g, by = "genres") %>%
+    mutate(pred = mu + b_i + b_u + b_g) %>%
+    mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+  
+  return(accuracy(testSet$rating, predicted_ratings$roundPred))
+})
+fig7 <- ggplot() + aes(wholes, waccs) + geom_point() +
+  xlab("% Ratings Integer") + ylab("Accuracy") + ggtitle("% Integer Tuning")
+
+wholeCutoff <- wholes[which.max(waccs)]
+
+# retabulate integer-happy users with optimized cutoff
+usersWhoWhole <- trainSet %>% group_by(userId) %>%
+  summarize(total = length(rating), 
+            wholes = sum(rating %% 1 == 0), 
+            wholepct = wholes/total) %>%
+  filter(wholepct >= wholeCutoff) %>%
+  .$userId
+
+# now re-round predicted ratings based on the above
+predicted_ratings <- predicted_ratings %>%
+  mutate(roundPred = flixStar(pred, userId %in% usersWhoWhole))
+```
+
+```{r fig_wholeTune, echo=FALSE}
+fig7
+```
+
+As shown above, assigning only integer ratings to users who use them at least `r 100 * wholeCutoff` percent of the time in the training set provides the best result.
+
+```{r bind_table_integer, include=FALSE}
+mean_results <- bind_rows(mean_results, data_frame(Method="+ Integer Tune", Accuracy_Whole = max(waccs)))
+```
+
+```{r echo=FALSE}
+mean_results %>% knitr::kable()
+```
+
+Looking at the raw prediction error (predicted rating minus the true rating) in the test set, we find the largest group of incorrect predictions at +1 and -1 from the true:
+
+```{r fig_error, echo=FALSE}
+fig7b <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  ggplot() + aes(diff) + geom_histogram(binwidth = 0.5) +
+  xlab("Prediction - True") + ylab("Count") + ggtitle("Prediction Error in edX Test Set")
+fig7b
+#Skewed a little negative (our prediction is pessimistic)
+
+```
+
+Isolating this group of +1/-1 errors, we find that a the largest group is predicted 4s that were actually 5s:
+
+```{r fig_1off, echo=FALSE}
+#Which true ratings are we being optimistic/pessimistic about
+tooHi <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  filter(diff == 1) %>% .$rating
+tooLo <- predicted_ratings %>% mutate(diff = roundPred - testSet$rating) %>%
+  filter(diff == -1) %>% .$rating
+
+fig7c <- ggplot() + 
+  geom_histogram(aes(tooHi), fill = "red", binwidth = 0.5, alpha = 0.7) +
+  geom_histogram(aes(tooLo), fill = "green", binwidth = 0.5, alpha = 0.7) +
+  xlab("True Rating") + ylab("Count") + ggtitle("Predction +1 Too High (Red) or -1 Too Low (Green)")
+fig7c
+```
+
+This motivates another adjustment to our rounding algorithm to make it more optimistic: perhaps instead of rounding predicted 4.5+ ratings up to 5, a lower cutoff should be used for this rounding.  Perhaps a `ceiling()` rounding should be used above a certain "optimist" cutoff: users may be inclined to assign a 5 rating to anything that seems better than a 4, because it is a nice thing to do.  This cutoff between traditional and ceiling rounding in our `flixStar()` function is tuned below.
+
+```{r tune_optimist, echo=FALSE}
+# It appears that we're under-predicting positive ratings. Could be an "optimism bias"
+# I.e. many of our predicted 4s should be 5s. Many predicted 3s should be 4s
+# See if we can adjust our rounding algorithm to ceiling good ratings up instead of down
+optimistCutoff <- seq(2,4.5,0.1)
+
+optimistAcc <- sapply(optimistCutoff, function(optimist) {
+  flixStar2 <- function(ratings, whole = FALSE) {
+    map2_dbl(ratings, whole, function (a, b) {
+      if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+      if (b) {
+        if (a < optimist) round(a + 0.01) else ceiling(a)
+        } else {
+          if (a < optimist) round(a*2)/2 else ceiling(a*2)/2
+        }
+    })
+  }
+  
+  predicted_ratings2 <- predicted_ratings %>%
+    mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
+  
+  return(accuracy(testSet$rating, predicted_ratings2$roundPred))
+
+})
+
+fig8 <- ggplot() + aes(optimistCutoff, optimistAcc) + geom_point() +
+  xlab("Ceiling Round Above This Rating") + ylab("Accuracy") + ggtitle("Ceiling Round Tuning")
+newOptimist <- optimistCutoff[which.max(optimistAcc)]
+
+fig8
+
+# Redefine our rounding function accordingly
+flixStar2 <- function(ratings, whole = FALSE) {
+  map2_dbl(ratings, whole, function (a, b) {
+    optimist <- newOptimist
+    if (a <= 0.5) a <- 0.51 else if (a > 5) a <- 5
+    if (b) {
+      if (a < optimist) round(a + 0.01) else ceiling(a)
+    } else {
+      if (a < optimist) round(a*2)/2 else ceiling(a*2)/2
+    }
+  })
+}
+
+# now re-round predicted ratings based on the above
+predicted_ratings <- predicted_ratings %>%
+  mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
+
+```
+
+```{r bind_table_ceiling, include=FALSE}
+mean_results <- bind_rows(mean_results, data_frame(Method=" + Ceiling Tune", 
+                                                   Accuracy_Whole = max(optimistAcc)))
+
+```
+
+Predicted ratings above the cutoff of `r newOptimist` are now ceiling rounded.  This adjustment to the rounding algorithm improves accuracy further.
+
+```{r echo=FALSE}
+mean_results %>% knitr::kable()
+```
 
 
+### Other Methods
 
-
-
-
+More complex methods were explored for this model using the `recommenderLab` package, which implements a matrix-based data type for the user/movie/rating data sets.  A user-based collaborative filtering (UBCF) approach was tested on the much smaller `dslabs` MovieLens set.  Even on this much smaller set, the computation time was prohibitive, and did not yield a substantial improvement in the rounded accuracy.  While some parameter tuning may have improved this, the use of this package and method on the full 10M data set would not be feasible, nor a realistic task for a peer grader to re-run.
 
 ## Results
 
+As shown above, manipulation of the rounding method and parameters yielded a final un-rounded RMSE of `r round(mean_umgR_RMSE, digits=3)` and rounded accuracy of `r round(max(optimistAcc), digits=3)` on the test set.  While this accuracy does not meet the minimum threshold of 0.50 established in the evaluation rubric for the project, it is a significant improvement over the initial model as used in the course.
 
+While we do not have access to the true ratings in the `validation` set until grading, running the final algorithm on this set yields the following rating distribution:
+
+```{r run_prediction, echo=FALSE}
+# Now predict the validation set.
+predicted_ratings_V <- validation %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_g, by = "genres") %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
+
+write.csv(predicted_ratings_V %>% select(userId, movieId, rating = roundPred),
+          "submission.csv", na = "", row.names=FALSE)
+
+figV <- predicted_ratings_V %>% ggplot() + 
+  geom_histogram(aes(roundPred), binwidth = 0.5) +
+  xlab("Predicted Rating") + ylab("# Ratings") + ggtitle('Predicted Rating Histogram')
+figV 
+```
+
+The distribution appears similar to that in the training set, particularly near the median rating of `r med`.  Extreme values do not match as closely.
 
 ## Conclusion
 
+In this project, we implemented the recommendation model concept profiled in the course, with the modified goal of predicting exact, discrete half-star ratings.  In the process of converting predicted ratings to these discrete ratings, significant insight was gained into user rating assignment, allowing improvements to the rounding algorithm.  
 
+Avenues for refinement of the current work include further exploration of the genre tags applied to each movie, perhaps implementing scores/bias for each individual genre.  Similarly, implementing a method of genre preference per-user (rather than for all users rating a genre) would provide a more realistic effect of how each user tends to rate specific genres of movie.
+
+Based on the current results and the brief exploration of the UBCF recommender algorithm, it is likely that much more sophisticated (and computationally intensive) methods would be needed to achieve high levels of accuracy exceeding 0.5.  For the purposes of this project and given the very large size of the data set, this is left to future work.
