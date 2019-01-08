@@ -18,6 +18,9 @@ report.pdf is the final report.
 
 submission.csv is the predicted ratings for the validation set, ready for grading.
 
+<<<<<<< HEAD
 quiz.R is the script for responding to the pre-project data review quiz.
 
+=======
+>>>>>>> c5e577ceeff812c833584ef8b5050a97b1631b5a
 The remaining files were used in development and testing and are only saved for reference.
