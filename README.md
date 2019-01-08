@@ -12,6 +12,12 @@ Second, you will train a machine learning algorithm using the inputs in one subs
 ## Files included:
 createDataSets.R is as supplied by the course.  It downloads the movielens dataset and splits it into edx and validation.  This will be called if these objects don't exist yet.
 
-masterMean.R is the actual prediction script that develops the model and applies it to the validation list.
+report.Rmd includes the actual prediction script that develops the model and applies it to the validation list, along with the report text and figures.  It is self-contained and will call createDataSets.R if needed.
 
-report.rmd assumes that the prior scripts have been run.
+report.pdf is the final report.
+
+submission.csv is the predicted ratings for the validation set, ready for grading.
+
+quiz.R is the script for responding to the pre-project data review quiz.
+
+The remaining files were used in development and testing and are only saved for reference.
