@@ -1,7 +1,7 @@
 ---
-title: "MovieLens Project PH125.9x"
+title: "MovieLens Project HarvardX PH125.9x"
 author: "Martin Schiff"
-date: "January 6, 2019"
+date: "January 10, 2019"
 output: pdf_document
 ---
 
@@ -10,19 +10,70 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r prep, include=FALSE}
-library(tidyverse)
-library(caret)
 
-# If the data set isn't loaded yet, call the script
-if (!("edx" %in% ls())) source("createDataSets.R")
+# Load the edx & validation data sets using the provided script
+#
+#############################################################
+# Create edx set, validation set, and submission file
+#############################################################
 
-# if (!("edx" %in% ls())) load("createDataSets.RData")
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                      col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+# Learners will develop their algorithms on the edx set
+# For grading, learners will run algorithm on validation set to generate ratings
+
+validation <- validation %>% select(-rating)
+
+# Ratings will go into the CSV submission file below:
+
+# write.csv(validation %>% select(userId, movieId) %>% mutate(rating = NA),
+#           "submission.csv", na = "", row.names=FALSE)
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
 ```
 
 ## Introduction
 
-In this project, we are asked to create a movie recommendation system. Specifically, we are to predict the rating a user will give a movie in a validation set, based on a given set of users and movie ratings. The prediction will be judged on the raw accuracy---i.e. the percentage of predicted ratings exactly equal to the true user rating.  This is a somewhat different goal than the usual task of minimizing predicted error or selecting items a user is most likely to rate highly.  Only exactly correct predictions are considered accurate.
+In this project, we are asked to create a movie recommendation system. Specifically, we are to predict the rating a user will give a movie in a validation set, based on a given set of users and movie ratings. In the original problem statement, the prediction would be judged on the raw accuracy---i.e. the percentage of predicted ratings exactly equal to the true user rating.  This is a somewhat different goal than the usual task of minimizing predicted error or selecting items a user is most likely to rate highly.  Only exactly correct predictions are considered accurate. (In the updated January 2019 problem statement, accuracy based on root mean-square error or RMSE is also of interest).
 
 The provided data is from the MovieLens 10M set (i.e. 10 million ratings), a much larger version of the data set contained in the `dslabs` library used during the Recommendation Systems portion of the course.  The given data set `edx` is approximately 9 million records long and contains the following features:
 
@@ -34,9 +85,9 @@ while the test data set `validation` is roughly 1 million records long with the 
 
 Allowable ratings (and all of the ratings in the two provided sets) are from 0.5 to 5 in steps of 0.5, which could alternatively be considered a 10-step ordered classification.
 
-The prediction algorithm used in this project generally follows the simple model used in the course, judging the "bias" or difference from the mean for each user, item, and genre and implementing a regularization to discount extreme, occasional values.  While other algorithms may have proved more accurate, they were either beyond the scope of the course content or computationally prohibitive on this large set of data (particularly since the analysis needs to run on an unknown computer for peer grading).  The course approach has the advantages of being fast, easily scalable, and simple to modify.
+The prediction algorithm used in this project generally follows the simple model used in the course, judging the "bias" or difference from the mean for each user, item, and genre and implementing a regularization to discount extreme, occasional values.  While other algorithms may have proved more accurate, they were either beyond the scope of the course content or computationally prohibitive on this large set of data (particularly since the analysis potentially needs to run on an unknown computer for peer grading).  The course approach has the advantages of being fast, easily scalable, and simple to modify.
 
-The task of determining discrete, half-to-5-star ratings from the real number prediction allowed for significant improvements over simple rounding, and is the focus of the novel work discussed in this report.
+The task of determining discrete, half-to-5-star ratings from the real number prediction allowed for significant accuracy improvements over simple rounding, and is the focus of the novel work discussed in this report.
 
 ## Methods & Analysis
 
@@ -63,9 +114,9 @@ flixStar <- function(ratings, whole = FALSE) {
 }
 ```
 
-The benefit of the `flixStar()` function having the option of returning ratings discretized to either half or integer numbers will be motivated below.  The additional 0.01 factors are to account for IEEE rounding behavior, which would otherwise round 0.5 to the nearest even number.
+The benefit of the `flixStar()` function having the option of returning ratings discretized to either half or integer numbers will be motivated below.  The additional 0.01 factors are to account for IEEE rounding behavior, which would otherwise round 0.5 to the nearest even number rather than upward.
 
-Finally, to enable learning and evaluation without the use of the `validation` set, we split the `edx` set into its own `trainSet` and `testSet` components, using the same method as in the provided `createDataSets.R` script.
+Finally, to enable learning and evaluation without the use of the `validation` set, we split the `edx` set into its own `trainSet` and `testSet` components, using the same method as in the provided `edx`/`validation` split code.
 
 ```{r split, include=FALSE}
 ## Split edx into training and test data using same strategy as course split
@@ -125,7 +176,7 @@ fig2
 
 ```
 
-With this insight, we can tag certain users as preferring whole number ratings, and ensure that predictions for these users are rounded to an integer.  While many users assign integers 100% of the time, setting this to a lower percentage captures many more ratings.  An initial value of 75% is used here, and this percentage is tuned below to higher accuracy at an even lower proportion.
+With this insight, we can tag certain users as preferring whole number ratings, and ensure that predictions for these users are always rounded to an integer.  While many users assign integers 100% of the time, setting this to a lower percentage captures many more ratings and users.  An initial value of 75% is used here, and this percentage is tuned below to higher accuracy at an even lower proportion.
 
 ```{r usersWhoWhole, echo=TRUE}
 # We want to tag certain users as always or nearly always assigning whole number ratings
@@ -207,9 +258,9 @@ Interestingly, while the mean has lower RMSE, the median has much higher accurac
 
 Next, we center ratings on the movie average to determine movie bias $b_i$, on each user's average to determine user bias $b_u$, and on each genre "combo" average to determine genre bias $b_g$. This is because the `genres` feature includes concatenated tags for all genres that apply to the movie (e.g. "Comedy|Drama|Romance").  For current purposes, no attempt was made to split these into individual effects, and each combo was treated as its own genre.  
 
-During development, adding this genre effect provided only a minor improvement over movie + user factors alone.  These intermediate steps are not detailed here.  Splitting the genre into individual tags may have yielded more significant effects.
+During development, adding this genre effect provided only a minor improvement over movie + user factors alone.  These intermediate steps are not detailed here.  Splitting the genre into individual tags may have yielded more significant effects and could be explored in future refinements.
 
-In addition to calculating the accuracy of the prediction rounded to the nearest half-star, we use the list of integer-preferring users `usersWhoWhole` to restrict that subset of users to whole number predictions.  This yields a significant boost in accuracy.
+In addition to calculating the accuracy of the prediction rounded to the nearest half-star, we use the list of integer-preferring users `usersWhoWhole` to restrict that subset of users to whole number predictions only.  This yields a significant boost in accuracy.
 
 ```{r Mean_UMG, echo=TRUE}
 # Center on user/movie/genre-combo
@@ -253,7 +304,7 @@ mean_results %>% knitr::kable()
 
 ### Regularization
 
-Regularization penalizes records which stray far from the mean and have few associated ratings, such as an obscure film with only a few very low ratings.  Following the derivation in the course, we can select the bias values using a regularization factor $\lambda$ as follows:
+Regularization penalizes records which stray far from the mean but have few associated ratings, such as an obscure film with only a few very low ratings.  Following the derivation in the course, we can select the bias values using a regularization factor $\lambda$ as follows:
 
 $$\hat{b}_i(\lambda) = \frac{1}{\lambda + n_i} \sum_{i=1}^{n_i} \left(Y_{i,u,g} - \hat{\mu}\right)$$
 $$\hat{b}_u(\lambda) = \frac{1}{\lambda + n_u} \sum_{u=1}^{n_u} \left(Y_{i,u,g} - \hat{b}_i - \hat{\mu}\right)$$
@@ -335,7 +386,7 @@ This regularization is tuned by running over a sequence of $\lambda$ values and 
 fig6
 ```
 
-The tuned value of $\lambda =$ `r round(lambda, digits=2)` improves the un-rounded RMSE substantially, but with little effect on accuracy.  The regularization effect may be getting lost in the rounding to mostly integer ratings.
+The tuned value of $\lambda =$ `r round(lambda, digits=2)` improves the un-rounded rating RMSE, but with little effect on rating accuracy.  The regularization effect may be getting lost in the rounding to mostly integer ratings.
 
 ```{r echo=FALSE}
 mean_results %>% knitr::kable()
@@ -426,7 +477,7 @@ fig7c <- ggplot() +
 fig7c
 ```
 
-This motivates another adjustment to our rounding algorithm to make it more optimistic: perhaps instead of rounding predicted 4.5+ ratings up to 5, a lower cutoff should be used for this rounding.  Perhaps a `ceiling()` rounding should be used above a certain "optimist" cutoff: users may be inclined to assign a 5 rating to anything that seems better than a 4, because it is a nice thing to do.  This cutoff between traditional and ceiling rounding in our `flixStar()` function is tuned below.
+This motivates another adjustment to our rounding algorithm to make it more optimistic: perhaps instead of rounding predicted 4.5+ ratings up to 5, a lower cutoff should be used for this rounding.  Perhaps a `ceiling()` rounding should be used above a certain "optimist" cutoff: users may be inclined to assign a 5 rating to anything that seems better than a 4, because they are so happy with the movie.  This cutoff between traditional and ceiling rounding in our `flixStar()` function is tuned below.
 
 ```{r tune_optimist, echo=FALSE}
 # It appears that we're under-predicting positive ratings. Could be an "optimism bias"
@@ -497,7 +548,7 @@ More complex methods were explored for this model using the `recommenderLab` pac
 
 ## Results
 
-As shown above, manipulation of the rounding method and parameters yielded a final un-rounded RMSE of `r round(mean_umgR_RMSE, digits=3)` and rounded accuracy of `r round(max(optimistAcc), digits=3)` on the test set.  While this accuracy does not meet the minimum threshold of 0.50 established in the evaluation rubric for the project, it is a significant improvement over the initial model as used in the course.
+As shown above, manipulation of the rounding method and parameters yielded a **final un-rounded rating RMSE of `r round(mean_umgR_RMSE, digits=3)`** and **rounded rating accuracy of `r round(max(optimistAcc), digits=3)`** on the test set.  While this accuracy does not meet the minimum threshold of 0.50 established in the original evaluation rubric for the project, it is a significant improvement over the initial model as used in the course.
 
 While we do not have access to the true ratings in the `validation` set until grading, running the final algorithm on this set yields the following rating distribution:
 
@@ -510,8 +561,8 @@ predicted_ratings_V <- validation %>%
   mutate(pred = mu + b_i + b_u + b_g) %>%
   mutate(roundPred = flixStar2(pred, userId %in% usersWhoWhole))
 
-write.csv(predicted_ratings_V %>% select(userId, movieId, rating = roundPred),
-          "submission.csv", na = "", row.names=FALSE)
+# write.csv(predicted_ratings_V %>% select(userId, movieId, rating = roundPred),
+#           "submission.csv", na = "", row.names=FALSE)
 
 figV <- predicted_ratings_V %>% ggplot() + 
   geom_histogram(aes(roundPred), binwidth = 0.5) +
@@ -523,8 +574,8 @@ The distribution appears similar to that in the training set, particularly near 
 
 ## Conclusion
 
-In this project, we implemented the recommendation model concept profiled in the course, with the modified goal of predicting exact, discrete half-star ratings.  In the process of converting predicted ratings to these discrete ratings, significant insight was gained into user rating assignment, allowing improvements to the rounding algorithm.  
+In this project, we implemented the recommendation model concept profiled in the course, with the modified additional goal of predicting exact, discrete half-star ratings.  In the process of converting predicted ratings to these discrete ratings, significant insight was gained into user rating assignment, allowing improvements to the rounding algorithm.  
 
-Avenues for refinement of the current work include further exploration of the genre tags applied to each movie, perhaps implementing scores/bias for each individual genre.  Similarly, implementing a method of genre preference per-user (rather than for all users rating a genre) would provide a more realistic effect of how each user tends to rate specific genres of movie.
+Avenues for refinement of the current work include further exploration of the genre tags applied to each movie, perhaps implementing scores/bias for each individual genre.  Similarly, implementing a method of genre preference per-user (rather than for all users rating a genre) would provide a more realistic effect of how each user tends to prefer specific genres of movie.
 
 Based on the current results and the brief exploration of the UBCF recommender algorithm, it is likely that much more sophisticated (and computationally intensive) methods would be needed to achieve high levels of accuracy exceeding 0.5.  For the purposes of this project and given the very large size of the data set, this is left to future work.
