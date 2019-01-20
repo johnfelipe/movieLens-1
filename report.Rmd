@@ -50,25 +50,15 @@ temp <- movielens[test_index,]
 # Make sure userId and movieId in validation set are also in edx set
 
 validation <- temp %>% 
-  semi_join(edx, by = "movieId") %>%
-  semi_join(edx, by = "userId")
+     semi_join(edx, by = "movieId") %>%
+     semi_join(edx, by = "userId")
 
 # Add rows removed from validation set back into edx set
 
 removed <- anti_join(temp, validation)
 edx <- rbind(edx, removed)
 
-# Learners will develop their algorithms on the edx set
-# For grading, learners will run algorithm on validation set to generate ratings
-
-validation <- validation %>% select(-rating)
-
-# Ratings will go into the CSV submission file below:
-
-# write.csv(validation %>% select(userId, movieId) %>% mutate(rating = NA),
-#           "submission.csv", na = "", row.names=FALSE)
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
-
 ```
 
 ## Introduction
@@ -81,7 +71,7 @@ The provided data is from the MovieLens 10M set (i.e. 10 million ratings), a muc
 names(edx)
 ```
 
-while the test data set `validation` is roughly 1 million records long with the true `rating` column omitted, since it is what is to be predicted by the model.  
+while the test data set `validation` is roughly 1 million records long.  The true `rating` column in the `validation` set will be used to judge the predictions of the model.  
 
 Allowable ratings (and all of the ratings in the two provided sets) are from 0.5 to 5 in steps of 0.5, which could alternatively be considered a 10-step ordered classification.
 
@@ -548,9 +538,9 @@ More complex methods were explored for this model using the `recommenderLab` pac
 
 ## Results
 
-As shown above, manipulation of the rounding method and parameters yielded a **final un-rounded rating RMSE of `r round(mean_umgR_RMSE, digits=3)`** and **rounded rating accuracy of `r round(max(optimistAcc), digits=3)`** on the test set.  While this accuracy does not meet the minimum threshold of 0.50 established in the original evaluation rubric for the project, it is a significant improvement over the initial model as used in the course.
+As shown above, manipulation of the rounding method and parameters yielded a final raw rating RMSE of `r round(mean_umgR_RMSE, digits=3)` and rounded rating accuracy of `r round(max(optimistAcc), digits=3)` on the `edx` test set.  While this accuracy does not meet the minimum threshold of 0.50 established in the original evaluation rubric for the project, it is a significant improvement over the initial model as used in the course.
 
-While we do not have access to the true ratings in the `validation` set until grading, running the final algorithm on this set yields the following rating distribution:
+Running the final algorithm on the `validation` set yields the following rating distribution:
 
 ```{r run_prediction, echo=FALSE}
 # Now predict the validation set.
@@ -572,9 +562,16 @@ figV
 
 The distribution appears similar to that in the training set, particularly near the median rating of `r med`.  Extreme values do not match as closely.
 
+```{r final, include=FALSE}
+RMSE_final <- RMSE(validation$rating, predicted_ratings_V$pred)
+acc_final <- accuracy(validation$rating, predicted_ratings_V$roundPred)
+```
+
+Finally, we compare our predicted ratings to the true ratings in the `validation` set to determine our final RMSE and accuracy for grading.  **The resulting final `validation` set raw rating RSME is `r round(RMSE_final, digits=3)` and rounded accuracy is `r round(acc_final, digits=3)`.**
+
 ## Conclusion
 
-In this project, we implemented the recommendation model concept profiled in the course, with the modified additional goal of predicting exact, discrete half-star ratings.  In the process of converting predicted ratings to these discrete ratings, significant insight was gained into user rating assignment, allowing improvements to the rounding algorithm.  
+In this project, we implemented the recommendation model concept profiled in the course, with the modified additional goal of predicting exact, discrete half-star ratings.  In the process of converting predicted ratings to these discrete ratings, significant insight was gained into user rating assignment, allowing improvements to the rounding algorithm and yielding an RMSE of `r round(RMSE_final, digits=3)` and accuracy of `r round(acc_final, digits=3)`.
 
 Avenues for refinement of the current work include further exploration of the genre tags applied to each movie, perhaps implementing scores/bias for each individual genre.  Similarly, implementing a method of genre preference per-user (rather than for all users rating a genre) would provide a more realistic effect of how each user tends to prefer specific genres of movie.
 
